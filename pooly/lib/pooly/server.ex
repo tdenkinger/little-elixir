@@ -1,8 +1,10 @@
 defmodule Pooly.Server do
   use GenServer
+  import Supervisor.Spec
 
   defmodule State do
-    defstruct sup: nil, size: nil, mfa: nil, workers: nil, workers_sup: nil
+    defstruct sup: nil, size: nil, mfa: nil, monitors: nil,
+              workers: nil, worker_sup: nil
   end
 
   # API
@@ -11,10 +13,15 @@ defmodule Pooly.Server do
     GenServer.start_link(__MODULE__, [sup, pool_config], name: __MODULE__)
   end
 
+  def checkout, do: GenServer.call(__MODULE__, :checkout)
+  def checkin(worker_pid),  do: GenServer.cast(__MODULE__, {:checkin, worker_pid})
+  def status,   do: GenServer.call(__MODULE__, :status)
+
   # Callbacks
 
   def init([sup, pool_config]) when is_pid(sup) do
-    init(pool_config, %State{sup: sup})
+    monitors = :ets.new(:monitors, [:private])
+    init(pool_config, %State{sup: sup, monitors: monitors})
   end
 
   def init([{:mfa, mfa}   | rest], state), do: init(rest, %{state | mfa: mfa})
@@ -24,6 +31,33 @@ defmodule Pooly.Server do
   def init([], state) do
     send(self, :start_worker_supervisor)
     {:ok, state}
+  end
+
+  def handle_cast({:checkin, worker}, %{workers: worker, monitors: monitors} = state) do
+    case :ets.lookup(monitors, worker) do
+      [{pid, ref}] ->
+        true = Process.demonitor(ref)
+        true = :ets.delete(monitors, pid)
+        {:noreply, %{state | workers: [pid|worker]}}
+      [] ->
+        {:noreply, state}
+    end
+  end
+
+  def handle_call(:checkout, {from_pid, _ref},
+                  %{workers: workers, monitors: monitors} = state) do
+    case workers do
+      [worker|rest] ->
+        ref = Process.monitor(from_pid)
+        true = :ets.insert(monitors, {worker, ref})
+        {:reply, worker, %{state | workers: rest}}
+      [] ->
+        {:reply, :noproc, state}
+    end
+  end
+
+  def handle_call(:status, _from, %{workers: workers, monitors: monitors} = state) do
+    {:reply, {length(workers), :ets.info(monitors, :size)}, state}
   end
 
   def handle_info(:start_worker_supervisor,

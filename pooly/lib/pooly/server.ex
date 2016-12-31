@@ -33,12 +33,12 @@ defmodule Pooly.Server do
     {:ok, state}
   end
 
-  def handle_cast({:checkin, worker}, %{workers: worker, monitors: monitors} = state) do
+  def handle_cast({:checkin, worker}, %{workers: workers, monitors: monitors} = state) do
     case :ets.lookup(monitors, worker) do
       [{pid, ref}] ->
         true = Process.demonitor(ref)
         true = :ets.delete(monitors, pid)
-        {:noreply, %{state | workers: [pid|worker]}}
+        {:noreply, %{state | workers: [pid|workers]}}
       [] ->
         {:noreply, state}
     end
